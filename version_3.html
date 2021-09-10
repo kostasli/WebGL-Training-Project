@@ -1,0 +1,767 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" type="text/css" href="my_stylesheet.css" />
+    <script src="webgl-debug.js"></script>
+    <script src="gl-matrix-min.js"></script>
+
+    <!--source κωδικας του vertex shader -->
+    <script id="vShader" type="x-shader/x-vertex">
+      //attributes για θεση κορυφων και χρωματος κορυφων
+      attribute vec4 aVertexPosition;
+      attribute vec2 aTextureCoordinates;
+
+      //uniforms που θα φυλλαξουν τους πινακες μετ/σμου θεσης και καμερας/προοπτικης
+      uniform mat4 uTransformMatrix;
+      uniform mat4 uPerspectiveViewMatrix;
+
+      varying vec2 vTextureCoordinates;
+
+      //main συναρτηση του vertex shader
+      void main(){
+      	gl_Position = uPerspectiveViewMatrix * uTransformMatrix * aVertexPosition;
+      	vTextureCoordinates = aTextureCoordinates;
+      }
+    </script>
+
+    <!--source κωδικας του fragment shader -->
+    <script id="fShader" type="x-shader/x-fragment">
+      precision mediump float;
+      varying vec2 vTextureCoordinates;
+         uniform sampler2D uSampler;
+
+      //main συναρτηση του fragment shader
+      void main() {
+      	gl_FragColor = texture2D(uSampler, vTextureCoordinates);
+      }
+    </script>
+
+    <!--κυριως script σε javascript -->
+    <script>
+      var gl;
+      var canvas;
+      var shaderProgram;
+      var vertexBuffer;
+      var textureCoordinatesAttributePointer;
+
+      //θα χρησιμοποιησουμε 2 buffers χρωματος (αποχρωσεις του μπλε και αποχρωσεις του κοκκινου)
+
+      var greenColorBuffer;
+      var blueColorBuffer;
+      var yellowColorBuffer;
+      var redColorBuffer;
+      var purpleColorBuffer;
+      var textureBuffer;
+      var tableTextureBuffer;
+      var chairTextureBuffer;
+      var vertexPositionAttributePointer; //pointer που δειχνει στο attribute "aVertexPosition"
+      var vertexColorAttributePointer; //pointer που δειχνει στο attribute "aVertexColor"
+      var indexBuffer;
+      var samplerUniformPointer;
+
+      var tableTexture;
+      var chairTexture;
+
+      //η μεταβλητη start που ακολουθει, θα χρησιμοποιηθει ετσι ωστε καθε φορα που θα γινεται ανανεωση στη σελιδα
+      //να φορτωνονται οι default τιμες για προοπτικη και καμερα χωρις να λαμβανονται υπ'οψιν
+      //οι τιμες που "ξεμειναν" στα αντιστοιχα html textboxes, πριν την ανανεωση
+      var requestId = 0;
+      var totalAngle = 0;
+      var totalZ = 0.2;
+
+      //default τιμες για καμερα και προοπτικη
+      var viewAngle = (90 * Math.PI) / 180; //γωνια θεασης
+      var viewDistance = 5; //ορθογωνια αποσταση καμερας
+      var perspDistHigh = 10000; //μακρινο κατωφλι ορατοτητας
+      var perspDistLow = 0.01; //κοντινο κατωφλι ορατοτητας
+
+      var transformUniformPointer; //pointer που δειχνει στο uniform "uTransformMatrix"
+
+      var perspectiveViewUniformPointer; //pointer που δειχνει στο uniform "uPerspectiveViewMatrix"
+
+      //ΑΚΟΛΟΥΘΟΥΝ ΟΙ FUNCTIONS ΠΟΥ ΘΑ ΧΡΗΣΙΜΟΠΟΙΗΘΟΥΝ ΣΤΟ SCRIPT
+
+      function createGLContext(canvas) {
+        var context = null;
+
+        context = canvas.getContext("webgl");
+        if (!context) context = canvas.getContext("experimental-webgl");
+        if (context) {
+          context.viewportWidth = canvas.width;
+          context.viewportHeight = canvas.height;
+        } else {
+          alert("Failed to create WebGL context!");
+        }
+        return context;
+      }
+
+      function loadShader(type, shaderSource) {
+        var shader = gl.createShader(type);
+        gl.shaderSource(shader, shaderSource);
+        gl.compileShader(shader);
+
+        if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+          alert("Error compiling shader" + gl.getShaderInfoLog(shader));
+          gl.deleteShader(shader);
+          return null;
+        }
+        return shader;
+      }
+
+      function setupShaders() {
+        var vertexShaderSource = document.getElementById("vShader").textContent;
+
+        var fragmentShaderSource =
+          document.getElementById("fShader").textContent;
+
+        var vertexShader = loadShader(gl.VERTEX_SHADER, vertexShaderSource);
+        var fragmentShader = loadShader(
+          gl.FRAGMENT_SHADER,
+          fragmentShaderSource
+        );
+
+        shaderProgram = gl.createProgram();
+        gl.attachShader(shaderProgram, vertexShader);
+        gl.attachShader(shaderProgram, fragmentShader);
+        gl.linkProgram(shaderProgram);
+
+        if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)) {
+          alert("Failed to setup shaders");
+        }
+
+        gl.useProgram(shaderProgram);
+
+        vertexPositionAttributePointer = gl.getAttribLocation(
+          shaderProgram,
+          "aVertexPosition"
+        );
+
+        gl.enableVertexAttribArray(vertexPositionAttributePointer);
+
+        textureCoordinatesAttributePointer = gl.getAttribLocation(
+          shaderProgram,
+          "aTextureCoordinates"
+        );
+        gl.enableVertexAttribArray(textureCoordinatesAttributePointer);
+
+        transformUniformPointer = gl.getUniformLocation(
+          shaderProgram,
+          "uTransformMatrix"
+        );
+
+        perspectiveViewUniformPointer = gl.getUniformLocation(
+          shaderProgram,
+          "uPerspectiveViewMatrix"
+        );
+        samplerUniformPointer = gl.getUniformLocation(
+          shaderProgram,
+          "uSampler"
+        );
+      }
+
+      function setupBuffers() {
+        //ακολουθουν εντολες για τροφοδοτηση των κορυφων του κυβου στον vertexBuffer
+        vertexBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
+        var triangleVertices = [
+          //εδρα ΑΒΓΔ
+          -1.0,
+          1.0,
+          1.0,
+          1.0, //Α
+          -1.0,
+          -1.0,
+          1.0,
+          1.0, //Β
+          1.0,
+          -1.0,
+          1.0,
+          1.0, //Γ
+          1.0,
+          1.0,
+          1.0,
+          1.0, //Δ
+
+          //εδρα ΑΔΖΕ
+          -1.0,
+          1.0,
+          1.0,
+          1.0, //Α
+          1.0,
+          1.0,
+          1.0,
+          1.0, //Δ
+          1.0,
+          1.0,
+          -1.0,
+          1.0, //Ζ
+          -1.0,
+          1.0,
+          -1.0,
+          1.0, //Ε
+
+          //εδρα ΔΓΗΖ
+          1.0,
+          1.0,
+          1.0,
+          1.0, //Δ
+          1.0,
+          -1.0,
+          1.0,
+          1.0, //Γ
+          1.0,
+          -1.0,
+          -1.0,
+          1.0, //Η
+          1.0,
+          1.0,
+          -1.0,
+          1.0, //Ζ
+
+          //εδρα ΑΒΘΕ
+          -1.0,
+          1.0,
+          1.0,
+          1.0, //Α
+          -1.0,
+          -1.0,
+          1.0,
+          1.0, //Β
+          -1.0,
+          -1.0,
+          -1.0,
+          1.0, //Θ
+          -1.0,
+          1.0,
+          -1.0,
+          1.0, //Ε
+
+          //εδρα ΘΒΓΗ
+          -1.0,
+          -1.0,
+          -1.0,
+          1.0, //Θ
+          -1.0,
+          -1.0,
+          1.0,
+          1.0, //Β
+          1.0,
+          -1.0,
+          1.0,
+          1.0, //Γ
+          1.0,
+          -1.0,
+          -1.0,
+          1.0, //Η
+
+          //εδρα ΕΘΗΖ
+          -1.0,
+          1.0,
+          -1.0,
+          1.0, //Ε
+          -1.0,
+          -1.0,
+          -1.0,
+          1.0, //Θ
+          1.0,
+          -1.0,
+          -1.0,
+          1.0, //Η
+          1.0,
+          1.0,
+          -1.0,
+          1.0, //Ζ
+        ];
+
+        //8 διαφορετικες κορυφες για σχεδιαση τριγωνων που θα φτιαξουν εναν 3d κυβο
+
+        gl.bufferData(
+          gl.ARRAY_BUFFER,
+          new Float32Array(triangleVertices),
+          gl.STATIC_DRAW
+        );
+        vertexBuffer.itemSize = 4;
+        vertexBuffer.numberOfItems = 24;
+
+        //ακολουθουν εντολες για τροφοδοτηση των δεικτων των κορυφων του κυβου στον indexBuffer
+        indexBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
+
+        //καθε εδρα του κυβου φτιαχνεται απο 2 τριγωνα, καθε κυβος εχει 6 εδρες οποτε 6*2=12 τριγωνα
+        //και καθε τριγωνο εχει 3 κορυφες, οποτε 12*3=36 κορυφες θα δηλωθουν συνολικα στον indexMatrix
+
+        var indexMatrix = [
+          //εδρα ΑΒΓΔ
+          0, 1, 2, 0, 3, 2,
+
+          //εδρα ΑΔΖΕ
+          4, 5, 6, 4, 7, 6,
+
+          //εδρα ΔΓΗΖ
+          8, 9, 10, 8, 11, 10,
+
+          //εδρα ΑΒΘΕ
+          12, 13, 14, 12, 15, 14,
+
+          //εδρα ΘΒΓΗ
+          16, 17, 18, 16, 19, 18,
+
+          //εδρα ΕΘΗΖ
+          20, 21, 22, 20, 23, 22,
+        ];
+        gl.bufferData(
+          gl.ELEMENT_ARRAY_BUFFER,
+          new Uint16Array(indexMatrix),
+          gl.STATIC_DRAW
+        );
+        indexBuffer.itemSize = 1;
+        indexBuffer.numberOfItems = 36;
+
+        textureBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, textureBuffer);
+        var textureCoordinates = [
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          1.0,
+          1.0,
+          1.0,
+
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          1.0,
+          1.0,
+          1.0,
+
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          1.0,
+          1.0,
+          1.0,
+
+          0.0,
+          0.0, // texture Buffer
+          1.0,
+          0.0,
+          0.0,
+          1.0,
+          1.0,
+          1.0,
+
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          1.0,
+          1.0,
+          1.0,
+
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          1.0,
+          1.0,
+          1.0,
+        ];
+
+        gl.bufferData(
+          gl.ARRAY_BUFFER,
+          new Float32Array(textureCoordinates),
+          gl.STATIC_DRAW
+        );
+        textureBuffer.itemSize = 2;
+        textureBuffer.numberOfItems = 24;
+
+        tableTextureBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, tableTextureBuffer);
+        var tableTextureCoordinates = [
+          0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0,
+
+          0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0,
+
+          0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0,
+
+          0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0,
+
+          0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0,
+
+          0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0,
+        ];
+
+        gl.bufferData(
+          gl.ARRAY_BUFFER,
+          new Float32Array(tableTextureCoordinates),
+          gl.STATIC_DRAW
+        );
+        tableTextureBuffer.itemSize = 2;
+        tableTextureBuffer.numberOfItems = 24;
+
+        chairTextureBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, chairTextureBuffer);
+        var chairTextureCoordinates = [
+          0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0,
+
+          0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0,
+
+          0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0,
+
+          0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0,
+
+          0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0,
+
+          0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0,
+        ];
+
+        gl.bufferData(
+          gl.ARRAY_BUFFER,
+          new Float32Array(chairTextureCoordinates),
+          gl.STATIC_DRAW
+        );
+        chairTextureBuffer.itemSize = 2;
+        chairTextureBuffer.numberOfItems = 24;
+
+        tableTexture = gl.createTexture();
+        loadImageForTexture("table.jpg", tableTexture);
+
+        chairTexture = gl.createTexture();
+        loadImageForTexture("chair.jpg", chairTexture);
+      }
+
+      function redraw() {
+        var p = 0;
+
+        var numStepAngle = 1;
+        numStepAngle = (numStepAngle * Math.PI) / 180.0;
+        totalAngle += numStepAngle;
+
+        // Αποφυγή overflow για το totalAngle
+        if (totalAngle >= 2 * Math.PI)
+          // Αν η συνολική γωνία μόλις έγινε (σε ακτίνια) μεγαλύτερη από 360 μοίρες (2π)
+          totalAngle = totalAngle - 2 * Math.PI;
+        // κάν'την ίση με την ίδια που είναι μικρότερη από 360 μοίρες
+        else if (totalAngle < 0)
+          // αλλιώς αν η συνολική γωνία μόλις έγινε αρνητική
+          totalAngle = totalAngle + 2 * Math.PI; // κάν'την ίση με την ίδια (σε ακτίνια) που είναι θετική
+
+        totalZ += 0.1;
+
+        var scaleMat = glMatrix.mat4.create();
+        var tranMat = glMatrix.mat4.create();
+
+        var tokens;
+
+        viewDistance = parseFloat(
+          document.getElementById("viewDistance").value
+        );
+        viewAngle =
+          (parseFloat(document.getElementById("viewAngle").value) * Math.PI) /
+          180.0;
+
+        //πινακας μετ/μου καμερας-view
+        var vMatrix = glMatrix.mat4.create();
+        var c = Math.cos(totalAngle);
+        var s = Math.sin(totalAngle);
+
+        //"γεμισμα" του πινακα μετ/σμου καμερας-view
+        glMatrix.mat4.lookAt(
+          vMatrix,
+          [viewDistance * c, viewDistance * s, totalZ],
+          [0, 0, 0],
+          [0, 0, 1]
+        );
+
+        //πινακας μετ/μου προοπτικης-perspective
+        var pMatrix = glMatrix.mat4.create();
+        //"γεμισμα" πινακα μετ/σμου προοπτικης-perspective
+        glMatrix.mat4.perspective(
+          pMatrix,
+          viewAngle,
+          1,
+          perspDistLow,
+          perspDistHigh
+        );
+
+        //γινομενο perspective * view
+        var pvMatrix = glMatrix.mat4.create();
+
+        //εκτελειται ο πολ/σμος πινακων καμερας και προοπτικης
+        //το γινομενο καταληγει στον pvMatrix
+        glMatrix.mat4.multiply(pvMatrix, pMatrix, vMatrix);
+
+        //τροφοδοτω το uniform καμερας/προοπτικης μεσω pointer, με τον πινακα γινομενου "καμερα επι προοπτικη"
+        gl.uniformMatrix4fv(
+          perspectiveViewUniformPointer,
+          false,
+          new Float32Array(pvMatrix)
+        );
+
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+        //table
+        var tableTranslationVertices = [
+          0,
+          0,
+          20.5, // epifaneia trapezioy
+          9.5,
+          9.5,
+          10, // mprosta podi
+          9.5,
+          -9.5,
+          10, // aristera podi
+          -9.5,
+          9.5,
+          10, // dejia podi
+          -9.5,
+          -9.5,
+          10, // pisw podi
+        ];
+
+        var tableScalingVertices = [
+          20 / 2,
+          20 / 2,
+          1 / 2,
+          1 / 2,
+          1 / 2,
+          20 / 2,
+          1 / 2,
+          1 / 2,
+          20 / 2,
+          1 / 2,
+          1 / 2,
+          20 / 2,
+          1 / 2,
+          1 / 2,
+          20 / 2,
+        ];
+
+        // chair
+        var chairTranslationVertices = [
+          0,
+          -10,
+          10.25, // epifaneia kareklas
+          -4.75,
+          -14.75,
+          5, // pisw aristera podi
+          4.75,
+          -14.75,
+          5, // pisw de3ia podi
+          -4.75,
+          -5.25,
+          5, // mprosta aristera podi
+          4.75,
+          -5.25,
+          5, // mprosta de3ia podi
+          0,
+          -14.75,
+          15.5, // plati kareklas
+        ];
+
+        var chairScalingVertices = [
+          10 / 2,
+          10 / 2,
+          0.5 / 2,
+          0.5 / 2,
+          0.5 / 2,
+          10 / 2,
+          0.5 / 2,
+          0.5 / 2,
+          10 / 2,
+          0.5 / 2,
+          0.5 / 2,
+          10 / 2,
+          0.5 / 2,
+          0.5 / 2,
+          10 / 2,
+          10 / 2,
+          0.5 / 2,
+          10 / 2,
+        ];
+
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, tableTexture);
+        gl.uniform1i(samplerUniformPointer, 0);
+        gl.bindBuffer(gl.ARRAY_BUFFER, tableTextureBuffer);
+        gl.vertexAttribPointer(
+          textureCoordinatesAttributePointer,
+          tableTextureBuffer.itemSize,
+          gl.FLOAT,
+          false,
+          0,
+          0
+        );
+
+        // table
+        for (p = 0; p <= 5 * 3; p += 3) {
+          gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
+          gl.vertexAttribPointer(
+            vertexPositionAttributePointer,
+            vertexBuffer.itemSize,
+            gl.FLOAT,
+            false,
+            0,
+            0
+          );
+          glMatrix.mat4.fromTranslation(tranMat, [
+            tableTranslationVertices[p],
+            tableTranslationVertices[p + 1],
+            tableTranslationVertices[p + 2],
+          ]);
+          glMatrix.mat4.fromScaling(scaleMat, [
+            tableScalingVertices[p],
+            tableScalingVertices[p + 1],
+            tableScalingVertices[p + 2],
+          ]);
+          var transScale = glMatrix.mat4.create();
+          glMatrix.mat4.multiply(transScale, tranMat, scaleMat);
+          gl.uniformMatrix4fv(
+            transformUniformPointer,
+            false,
+            new Float32Array(transScale)
+          );
+          gl.drawElements(
+            gl.TRIANGLES,
+            indexBuffer.numberOfItems,
+            gl.UNSIGNED_SHORT,
+            0
+          );
+        }
+
+        // chair
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D, chairTexture);
+        gl.uniform1i(samplerUniformPointer, 1);
+        gl.bindBuffer(gl.ARRAY_BUFFER, chairTextureBuffer);
+        gl.vertexAttribPointer(
+          textureCoordinatesAttributePointer,
+          chairTextureBuffer.itemSize,
+          gl.FLOAT,
+          false,
+          0,
+          0
+        );
+
+        for (p = 0; p <= 6 * 3; p += 3) {
+          gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
+          gl.vertexAttribPointer(
+            vertexPositionAttributePointer,
+            vertexBuffer.itemSize,
+            gl.FLOAT,
+            false,
+            0,
+            0
+          );
+          glMatrix.mat4.fromTranslation(tranMat, [
+            chairTranslationVertices[p],
+            chairTranslationVertices[p + 1],
+            chairTranslationVertices[p + 2],
+          ]);
+          glMatrix.mat4.fromScaling(scaleMat, [
+            chairScalingVertices[p],
+            chairScalingVertices[p + 1],
+            chairScalingVertices[p + 2],
+          ]);
+          var transScale = glMatrix.mat4.create();
+          glMatrix.mat4.multiply(transScale, tranMat, scaleMat);
+          gl.uniformMatrix4fv(
+            transformUniformPointer,
+            false,
+            new Float32Array(transScale)
+          );
+          gl.drawElements(
+            gl.TRIANGLES,
+            indexBuffer.numberOfItems,
+            gl.UNSIGNED_SHORT,
+            0
+          );
+        }
+      }
+
+      function loadImageForTexture(url, textureObject) {
+        var image = new Image();
+
+        image.onload = function () {
+          gl.bindTexture(gl.TEXTURE_2D, textureObject);
+          gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+          gl.texImage2D(
+            gl.TEXTURE_2D,
+            0,
+            gl.RGBA,
+            gl.RGBA,
+            gl.UNSIGNED_BYTE,
+            image
+          );
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+          gl.texParameteri(
+            gl.TEXTURE_2D,
+            gl.TEXTURE_MIN_FILTER,
+            gl.LINEAR_MIPMAP_NEAREST
+          );
+          gl.generateMipmap(gl.TEXTURE_2D);
+        };
+        image.src = url;
+      }
+
+      function startup() {
+        canvas = document.getElementById("myGLCanvas");
+        var minDimension = Math.min(window.innerWidth, window.innerHeight);
+        canvas.width = 0.9 * minDimension;
+        canvas.height = 0.9 * minDimension;
+        gl = WebGLDebugUtils.makeDebugContext(createGLContext(canvas));
+        setupShaders();
+        setupBuffers();
+        gl.clearColor(0.5, 0.5, 0.5, 1.0);
+
+        gl.enable(gl.DEPTH_TEST);
+        gl.viewport(0, 0, gl.viewportWidth, gl.viewportHeight);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+        startAnim();
+      }
+
+      function startAnim() {
+        if (!requestId) anim();
+      }
+      function anim() {
+        redraw();
+        requestId = window.requestAnimationFrame(anim);
+      }
+      function stopAnim() {
+        window.cancelAnimationFrame(requestId);
+        requestId = 0;
+      }
+    </script>
+  </head>
+
+  <body onload="startup()">
+    <div class="split left">
+      <div class="centered">
+        <canvas id="myGLCanvas"> </canvas>
+      </div>
+    </div>
+    <br />
+    <div class="split right">
+      <div class="centered">
+        View Angle (degrees):<input type="text" id="viewAngle" value="90" />
+        <br />
+        View Distance:<input type="text" id="viewDistance" value="20" />
+        <br /><br />
+        <button class="button" onClick="redraw()">Redraw scene</button>
+        <br />
+        Animation
+        <button class="button" onclick="startAnim()">Start</button>
+        <button class="button" onclick="stopAnim()">Stop</button>
+      </div>
+    </div>
+  </body>
+</html>

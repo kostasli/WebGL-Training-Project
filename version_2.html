@@ -1,0 +1,630 @@
+<!DOCTYPE HTML>
+<html>
+<head>
+<script src="webgl-debug.js"></script>
+<script src="gl-matrix-min.js"></script>
+
+<!--source κωδικας του vertex shader -->
+<script id="vShader" type="x-shader/x-vertex">
+	//attributes για θεση κορυφων και χρωματος κορυφων
+	attribute vec4 aVertexPosition;
+	attribute vec4 aVertexColor;
+	
+	//uniforms που θα φυλλαξουν τους πινακες μετ/σμου θεσης και καμερας/προοπτικης 
+	uniform mat4 uTransformMatrix; 
+	uniform mat4 uPerspectiveViewMatrix;	
+	
+	varying vec4 vColor;
+	
+	//main συναρτηση του vertex shader
+	void main(){
+		gl_Position = uPerspectiveViewMatrix * uTransformMatrix * aVertexPosition; 
+		vColor = aVertexColor;
+	} 
+</script>
+
+<!--source κωδικας του fragment shader -->
+<script id="fShader" type="x-shader/x-fragment">
+	precision mediump float;
+	varying vec4 vColor;
+	
+	//main συναρτηση του fragment shader
+	void main() {
+		gl_FragColor = vColor;
+	}
+</script>
+
+<!--κυριως script σε javascript -->
+<script>
+var gl; 
+var canvas; 
+var shaderProgram; 
+var vertexBuffer; 
+
+//θα χρησιμοποιησουμε 2 buffers χρωματος (αποχρωσεις του μπλε και αποχρωσεις του κοκκινου)
+
+var greenColorBuffer;
+var blueColorBuffer;
+var yellowColorBuffer;
+var redColorBuffer;
+var purpleColorBuffer;
+
+ 
+var vertexPositionAttributePointer; //pointer που δειχνει στο attribute "aVertexPosition"
+var vertexColorAttributePointer; //pointer που δειχνει στο attribute "aVertexColor"
+var indexBuffer;
+
+//η μεταβλητη start που ακολουθει, θα χρησιμοποιηθει ετσι ωστε καθε φορα που θα γινεται ανανεωση στη σελιδα
+//να φορτωνονται οι default τιμες για προοπτικη και καμερα χωρις να λαμβανονται υπ'οψιν
+//οι τιμες που "ξεμειναν" στα αντιστοιχα html textboxes, πριν την ανανεωση
+var start = 0;
+
+//default τιμες για καμερα και προοπτικη
+var viewAngle = 90*Math.PI/180; //γωνια θεασης
+var viewDistance = 5; //ορθογωνια αποσταση καμερας
+var perspDistHigh = 20; //μακρινο κατωφλι ορατοτητας
+var perspDistLow = 0.01; //κοντινο κατωφλι ορατοτητας
+
+var transformUniformPointer; //pointer που δειχνει στο uniform "uTransformMatrix"
+
+var perspectiveViewUniformPointer; //pointer που δειχνει στο uniform "uPerspectiveViewMatrix"
+
+//ΑΚΟΛΟΥΘΟΥΝ ΟΙ FUNCTIONS ΠΟΥ ΘΑ ΧΡΗΣΙΜΟΠΟΙΗΘΟΥΝ ΣΤΟ SCRIPT
+  
+function createGLContext(canvas) {
+	var context = null;
+
+	context = canvas.getContext("webgl");  
+	if (!context)
+		context = canvas.getContext("experimental-webgl"); 
+	if (context) {
+		context.viewportWidth = canvas.width; 
+		context.viewportHeight = canvas.height; 
+	} 
+	else {
+		alert("Failed to create WebGL context!");
+	}
+	return context;
+}
+
+function loadShader(type, shaderSource) {
+	var shader = gl.createShader(type); 
+	gl.shaderSource(shader, shaderSource); 
+	gl.compileShader(shader); 
+
+	if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) { 
+		alert("Error compiling shader" + gl.getShaderInfoLog(shader)); 
+		gl.deleteShader(shader);  
+		return null;
+	}
+	return shader;  
+}
+
+function setupShaders() {
+	var vertexShaderSource = document.getElementById("vShader").textContent; 
+	
+	var fragmentShaderSource = document.getElementById("fShader").textContent; 
+	
+	var vertexShader = loadShader(gl.VERTEX_SHADER, vertexShaderSource); 
+	var fragmentShader = loadShader(gl.FRAGMENT_SHADER, fragmentShaderSource); 
+
+	shaderProgram = gl.createProgram(); 
+	gl.attachShader(shaderProgram, vertexShader); 
+	gl.attachShader(shaderProgram, fragmentShader); 
+	gl.linkProgram(shaderProgram); 
+
+	if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)) {
+		alert("Failed to setup shaders");
+	}
+
+	gl.useProgram(shaderProgram); 
+
+	vertexPositionAttributePointer = gl.getAttribLocation(shaderProgram, "aVertexPosition"); 
+
+	gl.enableVertexAttribArray(vertexPositionAttributePointer); 
+	
+	vertexColorAttributePointer = gl.getAttribLocation(shaderProgram, "aVertexColor"); 
+	gl.enableVertexAttribArray(vertexColorAttributePointer);
+	
+	transformUniformPointer = gl.getUniformLocation(shaderProgram, "uTransformMatrix"); 
+	
+	perspectiveViewUniformPointer = gl.getUniformLocation(shaderProgram, "uPerspectiveViewMatrix");
+}
+
+function setupBuffers() {
+	
+	//ακολουθουν εντολες για τροφοδοτηση των κορυφων του κυβου στον vertexBuffer
+	vertexBuffer = gl.createBuffer(); 
+	gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer); 
+	var triangleVertices = [
+							//εδρα ΑΒΓΔ
+							-1.0, 1.0, 1.0, 1.0,  //Α
+							-1.0, -1.0, 1.0, 1.0, //Β
+							1.0, -1.0, 1.0, 1.0,  //Γ
+							1.0, 1.0, 1.0, 1.0,   //Δ
+							
+							//εδρα ΑΔΖΕ
+							-1.0, 1.0, 1.0, 1.0,  //Α
+							1.0, 1.0, 1.0, 1.0,   //Δ
+							1.0, 1.0, -1.0, 1.0,  //Ζ
+							-1.0, 1.0, -1.0, 1.0, //Ε
+							
+							//εδρα ΔΓΗΖ
+							1.0, 1.0, 1.0, 1.0,   //Δ
+							1.0, -1.0, 1.0, 1.0,  //Γ
+							1.0, -1.0, -1.0, 1.0, //Η
+							1.0, 1.0, -1.0, 1.0,  //Ζ
+							
+							//εδρα ΑΒΘΕ
+							-1.0, 1.0, 1.0, 1.0,  //Α
+							-1.0, -1.0, 1.0, 1.0, //Β
+							-1.0, -1.0, -1.0, 1.0, //Θ
+							-1.0, 1.0, -1.0, 1.0, //Ε
+							
+							//εδρα ΘΒΓΗ
+							-1.0, -1.0, -1.0, 1.0, //Θ
+							-1.0, -1.0, 1.0, 1.0, //Β
+							1.0, -1.0, 1.0, 1.0,  //Γ
+							1.0, -1.0, -1.0, 1.0, //Η
+							
+							//εδρα ΕΘΗΖ
+							-1.0, 1.0, -1.0, 1.0, //Ε
+							-1.0, -1.0, -1.0, 1.0, //Θ
+							1.0, -1.0, -1.0, 1.0, //Η
+							1.0, 1.0, -1.0, 1.0  //Ζ
+							];
+	
+	//8 διαφορετικες κορυφες για σχεδιαση τριγωνων που θα φτιαξουν εναν 3d κυβο
+	
+	gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(triangleVertices),	gl.STATIC_DRAW);
+	vertexBuffer.itemSize = 4; 
+	vertexBuffer.numberOfItems = 24; 
+
+
+	//ακολουθουν εντολες για τροφοδοτηση των χρωματων των κορυφων του μπλε κυβου στον colorBuffer
+	greenColorBuffer=gl.createBuffer(); 
+	gl.bindBuffer(gl.ARRAY_BUFFER, greenColorBuffer);
+	
+	//η μεταβλητη colorVerices θα χρησιμοποιηθει ως βοηθητικη μεταβλητη για να τροφοδοτησουμε
+	//με χρωματα τους δυο buffers χρωματος (colorBuffer και redColorBuffer)
+	
+	//αρχιζουμε με τις μπλε αποχρωσεις που θα τις δωσουμε στον colorBuffer
+	var colorVertices = [	
+						//εδρα ΑΒΓΔ χρωματισμενη με cornflower blue
+						0.368, 0.952, 0.462, 1.0,
+						0.368, 0.952, 0.462, 1.0,
+						0.368, 0.952, 0.462, 1.0,
+						0.368, 0.952, 0.462, 1.0,
+						
+						//εδρα ΑΔΖΕ χρωματισμενη με light slate blue
+						0.152, 0.568, 0.219, 1.0,
+						0.152, 0.568, 0.219, 1.0,
+						0.152, 0.568, 0.219, 1.0,
+						0.152, 0.568, 0.219, 1.0,
+						
+						//εδρα ΔΓΗΖ χρωματισμενη με blue
+						0.086, 0.376, 0.129, 1.0,
+						0.086, 0.376, 0.129, 1.0,
+						0.086, 0.376, 0.129, 1.0,
+						0.086, 0.376, 0.129, 1.0,
+						
+						//εδρα ΑΒΘΕ χρωματισμενη με deep sky blue
+						0.000, 1.000, 0.000, 1.0,
+						0.000, 1.000, 0.000, 1.0,
+						0.000, 1.000, 0.000, 1.0,
+						0.000, 1.000, 0.000, 1.0,
+						
+						//εδρα ΘΒΓΗ χρωματισμενη με light blue
+						0.572, 0.866, 0.619, 1.0,
+						0.572, 0.866, 0.619, 1.0,
+						0.572, 0.866, 0.619, 1.0,
+						0.572, 0.866, 0.619, 1.0,
+						
+						//εδρα ΕΘΗΖ χρωματισμενη με turquoise 
+						0.058, 0.443, 0.117, 1.0,
+						0.058, 0.443, 0.117, 1.0,
+						0.058, 0.443, 0.117, 1.0,
+						0.058, 0.443, 0.117, 1.0,
+						];
+	gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(colorVertices),gl.STATIC_DRAW);
+	greenColorBuffer.itemSize=4;
+	greenColorBuffer.numberOfItems=24;
+	
+	// red
+	redColorBuffer=gl.createBuffer(); 
+	gl.bindBuffer(gl.ARRAY_BUFFER, redColorBuffer);
+	
+	//η μεταβλητη colorVerices θα χρησιμοποιηθει ως βοηθητικη μεταβλητη για να τροφοδοτησουμε
+	//με χρωματα τους δυο buffers χρωματος (colorBuffer και redColorBuffer)
+	
+	//αρχιζουμε με τις μπλε αποχρωσεις που θα τις δωσουμε στον colorBuffer
+	var colorVertices = [	
+						//εδρα ΑΒΓΔ χρωματισμενη με cornflower blue
+						0.784, 0.321, 0.317, 1.0,
+						0.784, 0.321, 0.317, 1.0,
+						0.784, 0.321, 0.317, 1.0,
+						0.784, 0.321, 0.317, 1.0,
+						
+						//εδρα ΑΔΖΕ χρωματισμενη με light slate blue
+						0.870, 0.494, 0.486, 1.0,
+						0.870, 0.494, 0.486, 1.0,
+						0.870, 0.494, 0.486, 1.0,
+						0.870, 0.494, 0.486, 1.0,
+						
+						//εδρα ΔΓΗΖ χρωματισμενη με blue
+						0.596, 0.188, 0.184, 1.0,
+						0.596, 0.188, 0.184, 1.0,
+						0.596, 0.188, 0.184, 1.0,
+						0.596, 0.188, 0.184, 1.0,
+						
+						//εδρα ΑΒΘΕ χρωματισμενη με deep sky blue
+						0.960, 0.105, 0.098, 1.0,
+						0.960, 0.105, 0.098, 1.0,
+						0.960, 0.105, 0.098, 1.0,
+						0.960, 0.105, 0.098, 1.0,
+						
+						//εδρα ΘΒΓΗ χρωματισμενη με light blue
+						1.000, 0.000, 0.000, 1.0,
+						1.000, 0.000, 0.000, 1.0,
+						1.000, 0.000, 0.000, 1.0,
+						1.000, 0.000, 0.000, 1.0,
+						
+						//εδρα ΕΘΗΖ χρωματισμενη με turquoise 
+						0.454, 0.050, 0.043, 1.0,
+						0.454, 0.050, 0.043, 1.0,
+						0.454, 0.050, 0.043, 1.0,
+						0.454, 0.050, 0.043, 1.0,
+						];
+	gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(colorVertices),gl.STATIC_DRAW);
+	redColorBuffer.itemSize=4;
+	redColorBuffer.numberOfItems=24;
+	
+	blueColorBuffer=gl.createBuffer(); 
+	gl.bindBuffer(gl.ARRAY_BUFFER, blueColorBuffer);
+	
+	//η μεταβλητη colorVertices θα χρησιμοποιηθει ως βοηθητικη μεταβλητη για να τροφοδοτησουμε
+	//με χρωματα τους δυο buffers χρωματος (blueColorBuffer και redColorBuffer)
+	
+	//αρχιζουμε με τις μπλε αποχρωσεις που θα τις δωσουμε στον blueColorBuffer
+	var colorVertices = [	
+						//εδρα ΑΒΓΔ χρωματισμενη με cornflower blue
+						0.392, 0.584, 0.929, 1.0,
+						0.392, 0.584, 0.929, 1.0,
+						0.392, 0.584, 0.929, 1.0,
+						0.392, 0.584, 0.929, 1.0,
+						
+						//εδρα ΑΔΖΕ χρωματισμενη με light slate blue
+						0.415, 0.352, 0.803, 1.0,
+						0.415, 0.352, 0.803, 1.0,
+						0.415, 0.352, 0.803, 1.0,
+						0.415, 0.352, 0.803, 1.0,
+						
+						//εδρα ΔΓΗΖ χρωματισμενη με blue
+						0.0, 0.0, 1.0, 1.0,
+						0.0, 0.0, 1.0, 1.0,
+						0.0, 0.0, 1.0, 1.0,
+						0.0, 0.0, 1.0, 1.0,
+						
+						//εδρα ΑΒΘΕ χρωματισμενη με deep sky blue
+						0.0, 0.749, 1.0, 1.0,
+						0.0, 0.749, 1.0, 1.0,
+						0.0, 0.749, 1.0, 1.0,
+						0.0, 0.749, 1.0, 1.0,
+						
+						//εδρα ΘΒΓΗ χρωματισμενη με light blue
+						0.678, 0.847, 0.901, 1.0,
+						0.678, 0.847, 0.901, 1.0,
+						0.678, 0.847, 0.901, 1.0,
+						0.678, 0.847, 0.901, 1.0,
+						
+						//εδρα ΕΘΗΖ χρωματισμενη με turquoise 
+						0.250, 0.878, 0.815, 1.0,
+						0.250, 0.878, 0.815, 1.0,
+						0.250, 0.878, 0.815, 1.0,
+						0.250, 0.878, 0.815, 1.0
+						];
+						
+	gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(colorVertices),gl.STATIC_DRAW);
+	blueColorBuffer.itemSize=4;
+	blueColorBuffer.numberOfItems=24;
+	
+	yellowColorBuffer=gl.createBuffer(); 
+	gl.bindBuffer(gl.ARRAY_BUFFER, yellowColorBuffer);
+	
+	//η μεταβλητη colorVertices θα χρησιμοποιηθει ως βοηθητικη μεταβλητη για να τροφοδοτησουμε
+	//με χρωματα τους δυο buffers χρωματος (blueColorBuffer και redColorBuffer)
+	
+	//αρχιζουμε με τις μπλε αποχρωσεις που θα τις δωσουμε στον blueColorBuffer
+	var colorVertices = [	
+						//εδρα ΑΒΓΔ χρωματισμενη με cornflower blue
+						0.866, 0.862, 0.250, 1.0,
+						0.866, 0.862, 0.250, 1.0,
+						0.866, 0.862, 0.250, 1.0,
+						0.866, 0.862, 0.250, 1.0,
+						
+						//εδρα ΑΔΖΕ χρωματισμενη με light slate blue
+						0.745, 0.741, 0.294, 1.0,
+						0.745, 0.741, 0.294, 1.0,
+						0.745, 0.741, 0.294, 1.0,
+						0.745, 0.741, 0.294, 1.0,
+						
+						//εδρα ΔΓΗΖ χρωματισμενη με blue
+						0.929, 0.921, 0.313, 1.0,
+						0.929, 0.921, 0.313, 1.0,
+						0.929, 0.921, 0.313, 1.0,
+						0.929, 0.921, 0.313, 1.0,
+						
+						//εδρα ΑΒΘΕ χρωματισμενη με deep sky blue
+						0.921, 0.952, 0.125, 1.0,
+						0.921, 0.952, 0.125, 1.0,
+						0.921, 0.952, 0.125, 1.0,
+						0.921, 0.952, 0.125, 1.0,
+						
+						//εδρα ΘΒΓΗ χρωματισμενη με light blue
+						0.564, 0.580, 0.141, 1.0,
+						0.564, 0.580, 0.141, 1.0,
+						0.564, 0.580, 0.141, 1.0,
+						0.564, 0.580, 0.141, 1.0,
+						
+						//εδρα ΕΘΗΖ χρωματισμενη με turquoise 
+						0.960, 0.972, 0.607, 1.0,
+						0.960, 0.972, 0.607, 1.0,
+						0.960, 0.972, 0.607, 1.0,
+						0.960, 0.972, 0.607, 1.0,
+						];
+	gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(colorVertices),gl.STATIC_DRAW);
+	yellowColorBuffer.itemSize=4;
+	yellowColorBuffer.numberOfItems=24;
+	
+	//purple
+	purpleColorBuffer=gl.createBuffer(); 
+	gl.bindBuffer(gl.ARRAY_BUFFER, purpleColorBuffer);
+	
+	//η μεταβλητη colorVertices θα χρησιμοποιηθει ως βοηθητικη μεταβλητη για να τροφοδοτησουμε
+	//με χρωματα τους δυο buffers χρωματος (blueColorBuffer και redColorBuffer)
+	
+	//αρχιζουμε με τις μπλε αποχρωσεις που θα τις δωσουμε στον blueColorBuffer
+	var colorVertices = [	
+						//εδρα ΑΒΓΔ χρωματισμενη με cornflower blue
+						0.588, 0.188, 0.690, 1.0,
+						0.588, 0.188, 0.690, 1.0,
+						0.588, 0.188, 0.690, 1.0,
+						0.588, 0.188, 0.690, 1.0,
+						
+						//εδρα ΑΔΖΕ χρωματισμενη με light slate blue
+						0.368, 0.129, 0.431, 1.0,
+						0.368, 0.129, 0.431, 1.0,
+						0.368, 0.129, 0.431, 1.0,
+						0.368, 0.129, 0.431, 1.0,
+						
+						//εδρα ΔΓΗΖ χρωματισμενη με blue
+						0.772, 0.172, 0.929, 1.0,
+						0.772, 0.172, 0.929, 1.0,
+						0.772, 0.172, 0.929, 1.0,
+						0.772, 0.172, 0.929, 1.0,
+						
+						//εδρα ΑΒΘΕ χρωματισμενη με deep sky blue
+						0.882, 0.474, 0.988, 1.0,
+						0.882, 0.474, 0.988, 1.0,
+						0.882, 0.474, 0.988, 1.0,
+						0.882, 0.474, 0.988, 1.0,
+						
+						//εδρα ΘΒΓΗ χρωματισμενη με light blue
+						0.286, 0.109, 0.329, 1.0,
+						0.286, 0.109, 0.329, 1.0,
+						0.286, 0.109, 0.329, 1.0,
+						0.286, 0.109, 0.329, 1.0,
+						
+						//εδρα ΕΘΗΖ χρωματισμενη με turquoise 
+						1.000, 0.000, 1.000, 1.0,
+						1.000, 0.000, 1.000, 1.0,
+						1.000, 0.000, 1.000, 1.0,
+						1.000, 0.000, 1.000, 1.0,
+						];
+	gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(colorVertices),gl.STATIC_DRAW);
+	purpleColorBuffer.itemSize=4;
+	purpleColorBuffer.numberOfItems=24;
+	
+	//ΤΕΛΟΣ ΤΟ "ΓΕΜΙΣΜΑ" ΤΩΝ COLOR BUFFERS
+	
+	//ακολουθουν εντολες για τροφοδοτηση των δεικτων των κορυφων του κυβου στον indexBuffer	
+	indexBuffer = gl.createBuffer(); 
+	gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,indexBuffer);
+	
+	//καθε εδρα του κυβου φτιαχνεται απο 2 τριγωνα, καθε κυβος εχει 6 εδρες οποτε 6*2=12 τριγωνα
+	//και καθε τριγωνο εχει 3 κορυφες, οποτε 12*3=36 κορυφες θα δηλωθουν συνολικα στον indexMatrix
+	 
+	var indexMatrix = [
+						//εδρα ΑΒΓΔ
+						0,1,2,
+						0,3,2,
+						
+						//εδρα ΑΔΖΕ
+						4,5,6,
+						4,7,6,
+						
+						//εδρα ΔΓΗΖ
+						8,9,10,
+						8,11,10,
+						
+						//εδρα ΑΒΘΕ
+						12,13,14,
+						12,15,14,
+						
+						//εδρα ΘΒΓΗ
+						16,17,18,
+						16,19,18,
+						
+						//εδρα ΕΘΗΖ
+						20,21,22,
+						20,23,22	
+						];
+	gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,new Uint16Array(indexMatrix),gl.STATIC_DRAW);   
+	indexBuffer.itemSize=1; 
+	indexBuffer.numberOfItems = 36;
+}
+
+
+
+function redraw() {
+	
+	var scaleMat = glMatrix.mat4.create();
+	var tranMat = glMatrix.mat4.create();
+	start++; //αν εκτελεστει η redraw αυξανεται ο μετρητης start
+	
+	var tokens;
+	
+	tokens = (document.querySelector('input[name="position"]:checked').value).split("-");
+	
+	var fx = fy = fz = 1;
+		
+	if(tokens[0] == "Left")  fx = -1;
+	if(tokens[1] == "Front")  fy = -1;		
+	if(tokens[2] == "Bottom")	fz = -1;
+		
+	viewDistance = parseFloat(document.getElementById("viewDistance").value);
+	perspDistHigh = viewDistance * 4;
+	viewAngle = parseFloat(document.getElementById("viewAngle").value) * Math.PI/180.0;
+	
+	//πινακας μετ/μου καμερας-view
+	var vMatrix = glMatrix.mat4.create();
+	//"γεμισμα" του πινακα μετ/σμου καμερας-view
+	glMatrix.mat4.lookAt(vMatrix,[fx*viewDistance,fy*viewDistance,fz*viewDistance],[0,0,0],[0,0,1]);
+	
+	//πινακας μετ/μου προοπτικης-perspective
+	var pMatrix = glMatrix.mat4.create();
+	//"γεμισμα" πινακα μετ/σμου προοπτικης-perspective
+	glMatrix.mat4.perspective(pMatrix,viewAngle,1,perspDistLow,perspDistHigh);
+	
+	//γινομενο perspective * view	
+	var pvMatrix = glMatrix.mat4.create();
+	
+	//εκτελειται ο πολ/σμος πινακων καμερας και προοπτικης
+	//το γινομενο καταληγει στον pvMatrix
+	glMatrix.mat4.multiply(pvMatrix,pMatrix,vMatrix);
+	
+	//τροφοδοτω το uniform καμερας/προοπτικης μεσω pointer, με τον πινακα γινομενου "καμερα επι προοπτικη"
+	gl.uniformMatrix4fv(perspectiveViewUniformPointer, false, new Float32Array(pvMatrix));
+		
+	gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+	// epifaneia trapezioy
+	tranMat= glMatrix.mat4.fromTranslation(tranMat,[0, 0, 20.5]);
+	scaleMat = glMatrix.mat4.fromScaling(scaleMat,[20/2, 20/2, 1/2]);
+	drawCube(scaleMat, tranMat, vertexBuffer, indexBuffer,greenColorBuffer);
+	
+	// mprosta podi (kokkino)
+	tranMat = glMatrix.mat4.fromTranslation(tranMat, [9.5, 9.5, 10]);
+	scaleMat = glMatrix.mat4.fromScaling(scaleMat,[1/2, 1/2, 20/2]);
+	drawCube(scaleMat, tranMat, vertexBuffer, indexBuffer,redColorBuffer);
+	
+	// αριστερα podi
+	tranMat = glMatrix.mat4.fromTranslation(tranMat, [9.5, -9.5, 10]);
+	scaleMat = glMatrix.mat4.fromScaling(scaleMat,[1/2, 1/2, 20/2]);
+	drawCube(scaleMat, tranMat, vertexBuffer, indexBuffer,yellowColorBuffer);
+	
+	// δεξιά podi (kitrino)
+	tranMat = glMatrix.mat4.fromTranslation(tranMat, [-9.5, 9.5, 10]);
+	scaleMat = glMatrix.mat4.fromScaling(scaleMat, [1/2, 1/2, 20/2]);
+	drawCube(scaleMat, tranMat, vertexBuffer, indexBuffer,blueColorBuffer);
+	
+	// πίσω podi
+	tranMat = glMatrix.mat4.fromTranslation(tranMat, [-9.5, -9.5, 10]);
+	scaleMat = glMatrix.mat4.fromScaling(scaleMat,[1/2, 1/2, 20/2]);
+	drawCube(scaleMat, tranMat, vertexBuffer, indexBuffer,purpleColorBuffer);
+	
+	// mikro trapezoyli
+	//epifaneia mikrou
+	tranMat= glMatrix.mat4.fromTranslation(tranMat,[0, -10, 10.25]);
+	scaleMat = glMatrix.mat4.fromScaling(scaleMat,[10/2, 10/2, 0.5/2]);
+	drawCube(scaleMat, tranMat, vertexBuffer, indexBuffer,blueColorBuffer);
+	
+	//pisw aristera podi
+	tranMat = glMatrix.mat4.fromTranslation(tranMat, [ -4.75,-14.75 , 5]);
+	scaleMat = glMatrix.mat4.fromScaling(scaleMat,[0.5/2, 0.5/2, 10/2]);
+	drawCube(scaleMat, tranMat, vertexBuffer, indexBuffer,blueColorBuffer);
+	
+	//pisw deksia podi
+	tranMat = glMatrix.mat4.fromTranslation(tranMat, [4.75, -14.75, 5]);
+	scaleMat = glMatrix.mat4.fromScaling(scaleMat,[0.5/2, 0.5/2, 10/2]);
+	drawCube(scaleMat, tranMat, vertexBuffer, indexBuffer,blueColorBuffer);
+	
+	//mprosta aristera podi
+	tranMat = glMatrix.mat4.fromTranslation(tranMat, [-4.75, -5.25, 5]);
+	scaleMat = glMatrix.mat4.fromScaling(scaleMat,[0.5/2, 0.5/2, 10/2]);
+	drawCube(scaleMat, tranMat, vertexBuffer, indexBuffer,blueColorBuffer);
+	
+	//mporsta dksia podi
+	tranMat = glMatrix.mat4.fromTranslation(tranMat, [4.75, -5.25, 5]);
+	scaleMat = glMatrix.mat4.fromScaling(scaleMat,[0.5/2, 0.5/2, 10/2]);
+	drawCube(scaleMat, tranMat, vertexBuffer, indexBuffer,blueColorBuffer);	
+	
+	//plati kareklas
+	tranMat = glMatrix.mat4.fromTranslation(tranMat, [0, -14.75, 15.5]);
+	scaleMat = glMatrix.mat4.fromScaling(scaleMat,[10/2, 0.5/2, 10/2]);
+	drawCube(scaleMat, tranMat, vertexBuffer, indexBuffer,blueColorBuffer);
+	
+	
+
+}
+
+function drawCube(scaling, translation, vertexBuffer, indexBuffer, colorBuffer){
+
+	gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
+	gl.vertexAttribPointer(vertexPositionAttributePointer, vertexBuffer.itemSize, gl.FLOAT, false, 0, 0);
+	
+	gl.bindBuffer(gl.ARRAY_BUFFER, colorBuffer);
+	gl.vertexAttribPointer(vertexColorAttributePointer, colorBuffer.itemSize, gl.FLOAT, false, 0, 0); 
+	
+	gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,indexBuffer); 
+
+    var transScale = glMatrix.mat4.create();
+    glMatrix.mat4.multiply(transScale,translation,scaling);
+    gl.uniformMatrix4fv(transformUniformPointer, false, new Float32Array(transScale)); 
+	gl.drawElements(gl.TRIANGLES,indexBuffer.numberOfItems,gl.UNSIGNED_SHORT, 0);
+}
+
+
+
+function startup() {
+	canvas = document.getElementById("myGLCanvas"); 
+	var minDimension=Math.min(window.innerWidth,window.innerHeight); 
+	canvas.width=0.9*minDimension; 
+	canvas.height=0.9*minDimension; 
+	gl = WebGLDebugUtils.makeDebugContext(createGLContext(canvas)); 
+	setupShaders(); 
+	setupBuffers(); 
+	gl.clearColor(0.5, 0.5, 0.5, 1.0); 
+	
+	gl.enable(gl.DEPTH_TEST); 
+	gl.viewport(0, 0, gl.viewportWidth, gl.viewportHeight);
+	gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT); 	
+	redraw(); 
+}
+
+</script>
+
+</head>
+
+<body onload="startup()">
+<canvas id="myGLCanvas" >
+</canvas>
+
+<br>
+View Angle (degrees):<input type="text" id="viewAngle" value="90">
+<br>
+View Distance:<input type="text" id="viewDistance" value="20">
+<br><br>
+<div id="radioButtons">
+	<input type="radio" name="position" value="Left-Front-Top" checked="checked">Left Front Top<br>
+	<input type="radio" name="position" value="Left-Front-Bottom">Left Front Bottom<br>
+	<input type="radio" name="position" value="Left-Back-Top">Left Back Top<br>
+	<input type="radio" name="position" value="Left-Back-Bottom">Left Back Bottom<br>
+	<input type="radio" name="position" value="Right-Front-Top">Right Front Top<br>
+	<input type="radio" name="position" value="Right-Front-Bottom">Right Front Bottom<br>
+	<input type="radio" name="position" value="Right-Back-Top">Right Back Top<br>
+	<input type="radio" name="position" value="Right-Back-Bottom">Right Back Bottom<br>
+</div>
+<button onClick="redraw()">Redraw scene</button>
+</body>
+</html>
